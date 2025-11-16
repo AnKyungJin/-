@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import { Header } from './components/Header';
 import { ModeSelector } from './components/ModeSelector';
 import { PromptInput } from './components/PromptInput';
@@ -7,9 +7,11 @@ import { ResultDisplay } from './components/ResultDisplay';
 import { PromptGuideModal } from './components/PromptGuideModal';
 import { EditTechniqueSelector } from './components/EditTechniqueSelector';
 import { EditPromptBuilder } from './components/EditPromptBuilder';
+import { ApiKeyModal } from './components/ApiKeyModal';
 import { AppMode, EditTechnique } from './types';
 import { generateImage } from './services/geminiService';
 import { fileToBase64 } from './utils/fileUtils';
+import { getApiKey } from './utils/apiKeyManager';
 import { EDIT_TECHNIQUES } from './constants';
 
 const App: React.FC = () => {
@@ -21,7 +23,18 @@ const App: React.FC = () => {
     const [isLoading, setIsLoading] = useState<boolean>(false);
     const [error, setError] = useState<string | null>(null);
     const [isGuideOpen, setIsGuideOpen] = useState<boolean>(false);
+    const [isApiKeyModalOpen, setIsApiKeyModalOpen] = useState<boolean>(false);
+    const [apiKey, setApiKey] = useState<string | null>(null);
     const [editTechnique, setEditTechnique] = useState<EditTechnique>(EDIT_TECHNIQUES[0].key);
+    
+    useEffect(() => {
+        const storedKey = getApiKey();
+        if (storedKey) {
+            setApiKey(storedKey);
+        } else {
+            setIsApiKeyModalOpen(true); // Open modal on first visit if no key
+        }
+    }, []);
 
     const handleFileChange = (file: File | null) => {
         setImageFile(file);
@@ -54,6 +67,12 @@ const App: React.FC = () => {
     };
 
     const handleSubmit = useCallback(async () => {
+        if (!apiKey) {
+            setError("API 키를 먼저 설정해주세요.");
+            setIsApiKeyModalOpen(true);
+            return;
+        }
+
         setIsLoading(true);
         setError(null);
         setGeneratedImageUrl(null);
@@ -78,17 +97,22 @@ const App: React.FC = () => {
         } finally {
             setIsLoading(false);
         }
-    }, [prompt, mode, imageFile]);
+    }, [prompt, mode, imageFile, apiKey]);
     
     const handlePromptChange = useCallback((newPrompt: string) => {
         setPrompt(newPrompt);
     }, []);
+    
+    const handleKeyVerified = (verifiedKey: string) => {
+        setApiKey(verifiedKey);
+    };
 
     const selectedTechnique = EDIT_TECHNIQUES.find(t => t.key === editTechnique) ?? EDIT_TECHNIQUES[0];
+    const isSubmitDisabled = isLoading || !prompt || !apiKey;
 
     return (
         <div className="min-h-screen bg-gray-900 text-gray-100 flex flex-col">
-            <Header />
+            <Header onOpenApiKeyModal={() => setIsApiKeyModalOpen(true)} />
             <main className="flex-grow container mx-auto p-4 md:p-8 flex flex-col lg:flex-row gap-8">
                 <div className="lg:w-1/3 flex flex-col gap-6">
                     <ModeSelector currentMode={mode} onModeChange={handleModeChange} />
@@ -116,6 +140,8 @@ const App: React.FC = () => {
                         onSubmit={handleSubmit}
                         isLoading={isLoading}
                         mode={mode}
+                        isSubmitDisabled={isSubmitDisabled}
+                        apiKeySet={!!apiKey}
                     />
 
                     <button 
@@ -135,6 +161,11 @@ const App: React.FC = () => {
                 </div>
             </main>
             <PromptGuideModal isOpen={isGuideOpen} onClose={() => setIsGuideOpen(false)} />
+            <ApiKeyModal 
+                isOpen={isApiKeyModalOpen} 
+                onClose={() => setIsApiKeyModalOpen(false)}
+                onKeyVerified={handleKeyVerified}
+            />
         </div>
     );
 };
