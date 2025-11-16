@@ -1,0 +1,5 @@
+{
+  "name": "Gemini 이미지 생성기 (Nano Banana)",
+  "description": "Gemini API를 사용하여 텍스트 프롬프트로 이미지를 생성하고 기존 이미지를 편집하는 애플리케이션입니다. '나노 바나나'로 알려진 gemini-2.5-flash-image-preview 모델을 활용합니다.",
+  "requestFramePermissions": []
+}
