@@ -3,6 +3,9 @@ import { getApiKey } from '../utils/apiKeyManager';
 
 const modelName = 'gemini-2.5-flash-image-preview';
 
+const MAX_RETRIES = 3;
+const INITIAL_BACKOFF_MS = 2000;
+
 const getClient = (): GoogleGenAI => {
     const apiKey = getApiKey();
     if (!apiKey) {
@@ -10,6 +13,12 @@ const getClient = (): GoogleGenAI => {
     }
     return new GoogleGenAI({ apiKey });
 }
+
+// Helper to check for the specific rate limit error
+const isRateLimitError = (error: unknown): boolean => {
+    return error instanceof Error && error.message.includes('429');
+};
+
 
 export const generateImage = async (
     prompt: string,
@@ -38,45 +47,60 @@ export const generateImage = async (
     
     const contents: Content[] = [{ parts }];
 
-    try {
-        const response: GenerateContentResponse = await ai.models.generateContent({
-            model: modelName,
-            contents,
-            config: {
-                // Must include both modalities when generating/editing images with this model
-                responseModalities: [Modality.IMAGE, Modality.TEXT],
-            },
-        });
-        
-        // Find the image part in the response
-        for (const candidate of response.candidates) {
-            for (const part of candidate.content.parts) {
-                if (part.inlineData) {
-                    const base64ImageBytes: string = part.inlineData.data;
-                    return `data:${part.inlineData.mimeType};base64,${base64ImageBytes}`;
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+        try {
+            const response: GenerateContentResponse = await ai.models.generateContent({
+                model: modelName,
+                contents,
+                config: {
+                    // Must include both modalities when generating/editing images with this model
+                    responseModalities: [Modality.IMAGE, Modality.TEXT],
+                },
+            });
+            
+            // Find the image part in the response
+            for (const candidate of response.candidates) {
+                for (const part of candidate.content.parts) {
+                    if (part.inlineData) {
+                        const base64ImageBytes: string = part.inlineData.data;
+                        return `data:${part.inlineData.mimeType};base64,${base64ImageBytes}`;
+                    }
                 }
             }
-        }
+    
+            // If no image part is found, check for a text response which might be an error or refusal
+            const textResponse = response.text?.trim();
+            if (textResponse) {
+                 throw new Error(`모델이 이미지를 생성하지 않았습니다. 응답: ${textResponse}`);
+            }
+    
+            throw new Error("모델 응답에서 생성된 이미지를 찾을 수 없습니다.");
 
-        // If no image part is found, check for a text response which might be an error or refusal
-        const textResponse = response.text?.trim();
-        if (textResponse) {
-             throw new Error(`모델이 이미지를 생성하지 않았습니다. 응답: ${textResponse}`);
-        }
+        } catch (error) {
+            console.error(`Gemini API Error (Attempt ${attempt + 1}):`, error);
 
-        throw new Error("모델 응답에서 생성된 이미지를 찾을 수 없습니다.");
+            // If it's a rate limit error and we haven't exhausted retries, wait and continue.
+            if (isRateLimitError(error) && attempt < MAX_RETRIES) {
+                const delay = INITIAL_BACKOFF_MS * Math.pow(2, attempt);
+                console.log(`Rate limit hit. Retrying in ${delay}ms...`);
+                await new Promise(resolve => setTimeout(resolve, delay));
+                continue;
+            }
 
-    } catch (error) {
-        console.error("Gemini API Error:", error);
-        if (error instanceof Error && error.message.includes('400')) {
-             throw new Error("잘못된 API 키일 수 있습니다. 키를 확인하고 다시 시도해주세요.");
+            // For any other error, or after the last retry for a rate limit error,
+            // throw a specific user-friendly error.
+            if (error instanceof Error && error.message.includes('400')) {
+                throw new Error("잘못된 API 키일 수 있습니다. 키를 확인하고 다시 시도해주세요.");
+            }
+            if (isRateLimitError(error)) {
+                throw new Error("요청이 너무 많습니다. 잠시 후 다시 시도해주세요.");
+            }
+            throw new Error(`API 요청에 실패했습니다: ${error instanceof Error ? error.message : String(error)}`);
         }
-        // Provide a more user-friendly error message
-        if (error instanceof Error && error.message.includes('429')) {
-             throw new Error("요청이 너무 많습니다. 잠시 후 다시 시도해주세요.");
-        }
-        throw new Error(`API 요청에 실패했습니다: ${error instanceof Error ? error.message : String(error)}`);
     }
+    
+    // This line should be unreachable but acts as a fallback.
+    throw new Error("이미지 생성 중 알 수 없는 오류가 발생했습니다.");
 };
 
 /**
